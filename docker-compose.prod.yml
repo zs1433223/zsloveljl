@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # ---------- 数据库 ----------
+  postgres:
+    image: postgres:16-alpine
+    container_name: love-postgres
+    environment:
+      POSTGRES_DB: love_db
+      POSTGRES_USER: love_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U love_user -d love_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - love-net
+    restart: unless-stopped
+
+  # ---------- 后端 ----------
+  backend:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/${GITHUB_REPOSITORY}-backend:latest
+    container_name: love-backend
+    environment:
+      DATABASE_URL: postgresql://love_user:${DB_PASSWORD}@postgres:5432/love_db
+      SECRET_KEY: ${SECRET_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      WECHAT_APPID: ${WECHAT_APPID}
+      WECHAT_SECRET: ${WECHAT_SECRET}
+      AMAP_WEB_SERVICE_KEY: ${AMAP_WEB_SERVICE_KEY}
+      STORAGE_TYPE: ${STORAGE_TYPE:-local}
+      UPLOAD_DIR: /app/uploads
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET}
+      OSS_BUCKET_NAME: ${OSS_BUCKET_NAME}
+      OSS_ENDPOINT: ${OSS_ENDPOINT}
+      OSS_CUSTOM_DOMAIN: ${OSS_CUSTOM_DOMAIN}
+      OSS_PREFIX: ${OSS_PREFIX}
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - love-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------- 前端 ----------
+  frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/${GITHUB_REPOSITORY}-frontend:latest
+    container_name: love-frontend
+    environment:
+      NEXT_PUBLIC_API_BASE: https://${API_DOMAIN}
+    networks:
+      - love-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------- 后台 ----------
+  admin:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/${GITHUB_REPOSITORY}-admin:latest
+    container_name: love-admin
+    networks:
+      - love-net
+    restart: unless-stopped
+
+  # ---------- Nginx 统一入口 ----------
+  nginx:
+    image: nginx:alpine
+    container_name: love-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - /www/server/panel/vhost/cert:/etc/nginx/certs:ro  # 宝塔证书目录挂载
+      - uploads_data:/var/www/uploads:ro
+    depends_on:
+      - backend
+      - frontend
+      - admin
+    networks:
+      - love-net
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  uploads_data:
+
+networks:
+  love-net:
+    driver: bridge
